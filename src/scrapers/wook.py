@@ -1,4 +1,5 @@
 import urllib.parse
+import json
 import re
 from .base_scraper import BaseScraper
 from src.utils.scraping_helper import get_soup, clean_text, clean_price, normalize_isbn
@@ -12,36 +13,22 @@ class WookScraper(BaseScraper):
             url = isbn
         else:
             isbn=normalize_isbn(isbn)
-            url = f"{self.base_url}/pesquisa?keyword={isbn}++"
+            url = f"{self.base_url}/pesquisa?keyword={isbn}"
 
         soup, final_url = get_soup(url)
-        if not soup or not soup.find("div", class_="right d-flex flex-column"):
+        if not soup or not soup.find("script", type="application/ld+json"):
             return None
 
-        info = soup.find("div", class_="right d-flex flex-column")
-        price_tag = info.find("span", class_="price text-black text-align-right")
-        price = clean_price(price_tag)
-
-        pages = 0
-        info_table = soup.find("table")
-        if info_table:
-            page_row = info_table.find("td", string=re.compile("Páginas"))
-            if page_row:
-                value_cell = page_row.find_next_sibling("td")
-                if value_cell:
-                    try:
-                        pages = int(clean_text(value_cell))
-                    except:
-                        pass
+        data = json.loads(soup.find("script", type="application/ld+json").string)
         
-        return {
+        return{
             "store": self.store_name,
-            "title_found": clean_text(info.find("span", class_="title")),
-            "author_found": clean_text(info.find("span", class_="authors").find("a")),
-            "price": price,
-            "pages": pages,
+            "title_found": data["name"],
+            "author_found": data["author"]["name"].replace(" e ", " and "),
+            "price": data["offers"]["price"],
+            "pages": data["numberOfPages"],
             "on_sale": bool(soup.find("s", class_="text-red text-align-right")),
-            "status": "Available" if price > 0 else "Unavailable",
+            "status": "Available" if soup.find("div", class_="right d-flex flex-column").find("span", class_="price text-black text-align-right") else "Unavailable",
             "link": final_url
         }
     
