@@ -9,7 +9,7 @@ def load_books(file_path, mode='isbn'):
         return []
 
     try:
-        df = pd.read_csv(file_path, dtype=str)
+        df = _read_csv_any_encoding(file_path)
         df.columns = df.columns.str.strip()
 
         books_list = []
@@ -56,3 +56,11 @@ def save_results(data, output_path):
     except Exception as e:
         print(f"Error: {e}")
         return False
+
+def _read_csv_any_encoding(file_path):
+    for encoding in ("utf-8-sig", "cp1252", "latin-1"):
+        try:
+            return pd.read_csv(file_path, dtype=str, encoding=encoding)
+        except UnicodeDecodeError:
+            continue
+    raise ValueError(f"Could not decode {file_path} with any known encoding.")
