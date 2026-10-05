@@ -1,6 +1,5 @@
-import urllib.parse
 import json
-import re
+import urllib.parse
 from .base_scraper import BaseScraper
 from src.utils.scraping_helper import get_soup, clean_text, clean_price, normalize_isbn
 

@@ -1,3 +1,4 @@
+import json
 from .base_scraper import BaseScraper
 from src.utils.scraping_helper import get_soup, clean_text, clean_price, normalize_isbn
 
@@ -13,32 +14,29 @@ class AlmedinaScraper(BaseScraper):
             url = f"{self.base_url}/catalogsearch/result/?q={isbn}"
 
         soup, response_link = get_soup(url)
-        if not soup: return None
-        if soup.find("div", class_="message notice"): return None
+        if not soup or not soup.find("script", type="application/ld+json"): return None
 
-        prod = soup.find("div", class_="wrap-holder")
+        data = json.loads(soup.find("script", type="application/ld+json").string)
 
-        info = prod.find("div", class_="prod-details-top")
-        if not info: return None
-        title_elem = info.find("h2", class_="prod-name")
-        author_elem = info.find("a", class_=None)
-
-        if not title_elem: return None
-
-        found_title = clean_text(title_elem)
-        found_author = clean_text(author_elem)
-
+        prod = soup.find("div", class_="product-info-main")
         price_area = prod.find("div", class_="price-box")
-        price_tag = prod.find("span", class_="price")
-        price = clean_price(price_tag)
+
+        pages = 0
+        for row in prod.find_all("tr"):
+            th, td = row.find("th"), row.find("td")
+            if th and td and "páginas" in clean_text(th).lower():
+                value = clean_text(td)
+                pages = int(value) if value.isdigit() else 0
+                break
 
         return {
             "store": self.store_name,
-            "title_found": found_title,
-            "author_found": found_author,
-            "price": price,
+            "title_found": data["name"],
+            "author_found": data["author"]["name"].replace(" e ", " and "),
+            "price": data["offers"]["price"],
+            "pages": pages,
             "on_sale": bool(price_area.find("span", class_="special-price")),
-            "status": "Unavailable" if "Indisponível" in info.find("span", id="disponibilidade").text else "Available",
+            "status": "Unavailable" if "Indisponível" in prod.find("div", class_="availability").text else "Available",
             "link": response_link
         }
     
