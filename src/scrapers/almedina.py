@@ -42,6 +42,7 @@ class AlmedinaScraper(BaseScraper):
     
     def search_by_text(self, title, author):
         query = title.lower() + " " + author.lower()
+        print(query)
         url = f"{self.base_url}/catalogsearch/result/?q={query}"
         soup, response_url = get_soup(url)
 
@@ -49,21 +50,22 @@ class AlmedinaScraper(BaseScraper):
 
         results = []
         unmatches = 0
-        products = soup.find_all("li", class_="products-listing-item")
+        products = soup.find_all("li", class_="product-item")
 
-        if not products:
+        if not soup.find("div", class_="sidebar"):
+            print("EI")
             match = self.scrape_by_isbn(response_url)
             if match:
                 results.append(match)
             return results
 
         for prod in products:
-            if unmatches >= 10:                        #TESTAR BERTRAND
+            if unmatches >= 10:
                 break
             
-            info = prod.find("div", class_="listing-info-top")
-            title_tag = info.find("p", class_="prod-name truncate")
-            author_tag = info.find("a", class_= None)
+            info = prod.find("div", class_="product-item-details")
+            title_tag = info.find("strong", class_="product-item-name")
+            author_tag = info.find("div", class_= "product-author-name")
 
             if not title_tag or not author_tag:
                 unmatches += 1
@@ -73,7 +75,7 @@ class AlmedinaScraper(BaseScraper):
             f_author = clean_text(author_tag)
 
             if self._validate_match(title, author, f_title, f_author):
-                price_area = prod.find("div", class_="bottom-info")
+                price_area = prod.find("div", class_="price-box")
                 price = clean_price(price_area.find("span", class_="price"))
 
                 results.append({

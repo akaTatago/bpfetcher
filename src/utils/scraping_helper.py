@@ -3,6 +3,7 @@ from bs4 import BeautifulSoup
 from unidecode import unidecode
 import time
 import random
+import re
 
 def get_soup(url):
     try:
@@ -22,11 +23,17 @@ def normalize_isbn(isbn):
     return isbn.replace('-', '').strip()
 
 def normalize(text):
-    if text:
-        if text.rfind(' -') != -1:
-            text=text[:text.rfind(' -')]
-
-        return unidecode(text.replace(':', '').strip().lower())
+    if not text:
+        return None
+    
+    text = re.sub(r'[\(\[].*?[\)\]]', '', text)
+    
+    for sep in (' -', ':'):
+        if sep in text:
+            text = text[:text.find(sep)]
+            
+    text = unidecode(text.strip().lower())
+    return re.sub(r'[^\w\s]', '', text).strip()
 
 def clean_price(element_or_text):
     if not element_or_text:

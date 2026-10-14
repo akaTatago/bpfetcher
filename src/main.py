@@ -117,7 +117,8 @@ def main():
                                 else:
                                     book_results.append(data)
                         except Exception as e:
-                            pass
+                            console.print(f"[bold red]Erro no scraper {scraper.store_name}: {e}[/bold red]")
+                            console.print_exception()
 
                     for scraper in browser_scrapers:
                         try:
@@ -137,8 +138,9 @@ def main():
                                     book_results.extend(data)
                                 else:
                                     book_results.append(data)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            console.print(f"[bold red]Erro no scraper {scraper.store_name}: {e}[/bold red]")
+                            console.print_exception()
 
                     
                     if args.mode == 'text':
