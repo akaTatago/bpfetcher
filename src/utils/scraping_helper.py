@@ -28,7 +28,7 @@ def normalize(text):
     
     text = re.sub(r'[\(\[].*?[\)\]]', '', text)
     
-    for sep in (' -', ':'):
+    for sep in (' -', ':', ' ou '):
         if sep in text:
             text = text[:text.find(sep)]
             
