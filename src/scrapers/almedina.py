@@ -1,4 +1,5 @@
 import json
+import urllib.parse
 from .base_scraper import BaseScraper
 from src.utils.scraping_helper import get_soup, clean_text, clean_price, normalize_isbn
 
@@ -41,8 +42,7 @@ class AlmedinaScraper(BaseScraper):
         }
     
     def search_by_text(self, title, author):
-        query = title.lower() + " " + author.lower()
-        print(query)
+        query = urllib.parse.quote(f"{title} {author}".lower())
         url = f"{self.base_url}/catalogsearch/result/?q={query}"
         soup, response_url = get_soup(url)
 
@@ -53,7 +53,6 @@ class AlmedinaScraper(BaseScraper):
         products = soup.find_all("li", class_="product-item")
 
         if not soup.find("div", class_="sidebar"):
-            print("EI")
             match = self.scrape_by_isbn(response_url)
             if match:
                 results.append(match)

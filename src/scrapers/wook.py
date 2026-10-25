@@ -32,7 +32,7 @@ class WookScraper(BaseScraper):
         }
     
     def search_by_text(self, title, author):
-        query = urllib.parse.quote(title.lower().replace(' ', '+'))
+        query = urllib.parse.quote(f"{title} {author}".lower())
         url = f"{self.base_url}/pesquisa?keyword={query}"
         soup, response_link = get_soup(url)
         if not soup: return []
