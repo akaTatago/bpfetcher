@@ -143,47 +143,32 @@ def main():
                             console.print_exception()
 
                     
-                    if args.mode == 'text':
-                        if book_results:
-                            for item in book_results:
-                                row = book.copy()
-                                row['Store'] = item.get('store')
-                                row['Title Found'] = item.get('title_found')
-                                row['Author Found'] = item.get('author_found')
-                                row['Status'] = item.get('status', 'Unavailable')
-                                row['Price'] = item.get('price', 0.0)
-                                row['On Sale'] = "Yes" if item.get('on_sale') else "No"
-                                row['Link'] = item.get('link', '')
-                                results.append(row)
-                    
+                    if book_results:
+                        for item in book_results:
+                            row = book.copy()
+                            row['Store'] = item.get('store')
+                            row['Title Found'] = item.get('title_found')
+                            row['Author Found'] = item.get('author_found')
+                            row['Status'] = item.get('status', 'Unavailable')
+                            row['Price'] = item.get('price', 0.0)
+                            row['Pages'] = item.get('pages', 0)
+                            row['On Sale'] = "Yes" if item.get('on_sale') else "No"
+                            row['Link'] = item.get('link', '')
+                            results.append(row)
                     else:
-                        final_record = book.copy()
-                        final_record.pop('Identifier', None)
-                        final_record.setdefault("Pages", 0)
-
-                        for s in all_active_scrapers:
-                            final_record[f"{s.store_name} Status"] = "Not found"
-                            final_record[f"{s.store_name} Price"] = 0.0
-                            final_record[f"{s.store_name} On Sale"] = "No"
-                            final_record[f"{s.store_name} Link"] = ""
-
-                        for data in book_results:
-                            store = data.get('store')
-                            final_record["Title Match"] = data.get("title_found", "")
-                            if "pages" in data and data["pages"] > 0:
-                                final_record["Pages"] = data["pages"]
-
-                            final_record[f"{store} Status"] = data.get("status", "Available")
-                            final_record[f"{store} Price"] = data.get("price", 0.0)
-                            final_record[f"{store} On Sale"] = "Yes" if data.get("on_sale") else "No"
-                            final_record[f"{store} Link"] = data.get("link", "")
-
-                        results.append(final_record)
+                        row = book.copy()
+                        row['Store'] = 'N/A'
+                        row['Title Found'] = ''
+                        row['Author Found'] = ''
+                        row['Status'] = 'Not found'
+                        row['Price'] = 0.0
+                        row['Pages'] = 0
+                        row['On Sale'] = 'No'
+                        row['Link'] = ''
+                        results.append(row)
 
                     progress.advance(task)
                     
-                    #time.sleep(0.1)
-
         if save_results(results, args.output):
             console.print(f"\n[dodger_blue1]Done![/dodger_blue1] Output saved in: [underline]{args.output}[/underline]")
         else:
