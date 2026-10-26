@@ -1,3 +1,4 @@
+import json
 import re, urllib.parse
 from .base_scraper import BaseScraper
 from src.utils.scraping_helper import get_soup, clean_text, clean_price, normalize_isbn, normalize
@@ -9,28 +10,39 @@ class BertrandScraper(BaseScraper):
     def scrape_by_isbn(self, isbn):
         isbn=normalize_isbn(isbn)
         url = f"{self.base_url}/pesquisa/{isbn}"
-        soup, final_url = get_soup(url)
+        soup, _ = get_soup(url)
         if not soup: return None
         prod = soup.find("div", class_="pch")
         if not prod: return None
+
+        prod_url = self.base_url + prod.find("a", class_="track")["href"]
+
+        soup, final_url = get_soup(prod_url)
+
+        if not soup or not soup.find("script", type="application/ld+json"):
+            return None
+
+        data = json.loads(soup.find("script", type="application/ld+json").string)
+
+        authors_data = data.get("author", [])
+        if isinstance(authors_data, list):
+            author_found = " e ".join([a.get("name", "") for a in authors_data])
+        elif isinstance(authors_data, dict):
+            author_found = authors_data.get("name", "")
+        else:
+            author_found = str(authors_data)
+
+        availability_tag = soup.find("span", class_="availability")
         
-        #TITLE
-        title_tag = prod.find("p", class_="pch__title")
-
-        #AUTHOR
-        author_tag = prod.find("p", class_="pch__author")
-
-        #PRICE
-        price = clean_price(prod.find("span", class_="pch__price-current"))
-
         return {
             "store": self.store_name,
-            "title_found": clean_text(title_tag),
-            "author_found": " e ".join([a.get_text(strip=True) for a in author_tag.find_all("a")]),
-            "price": price,
-            "on_sale": bool(prod.find("span", class_="pch__price-old")),
-            "status": "Unavailable" if soup.find("div", class_="pch--unavailable") else "Available",
-            "link": self.base_url + title_tag.find("a")["href"]
+            "title_found": data.get("name", ""),
+            "author_found": author_found,
+            "price": data.get("offers", {}).get("price", 0.0),
+            "pages": data.get("numberOfPages", 0),
+            "on_sale": bool(soup.find("span", class_="old")),
+            "status": "Unavailable" if availability_tag and "Esgotado" in clean_text(availability_tag) else "Available",
+            "link": final_url
         }
 
     def search_by_text(self, title, author):
