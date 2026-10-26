@@ -11,7 +11,7 @@ class WookScraper(BaseScraper):
         if "https://" in isbn:
             url = isbn
         else:
-            isbn=normalize_isbn(isbn)
+            isbn = normalize_isbn(isbn)
             url = f"{self.base_url}/pesquisa?keyword={isbn}"
 
         soup, final_url = get_soup(url)
@@ -20,14 +20,24 @@ class WookScraper(BaseScraper):
 
         data = json.loads(soup.find("script", type="application/ld+json").string)
         
-        return{
+        authors_data = data.get("author", {})
+        if isinstance(authors_data, list):
+            author_found = " e ".join([a.get("name", "") for a in authors_data])
+        elif isinstance(authors_data, dict):
+            author_found = authors_data.get("name", "")
+        else:
+            author_found = str(authors_data)
+            
+        right_flex = soup.find("div", class_="right d-flex flex-column")
+        
+        return {
             "store": self.store_name,
-            "title_found": data["name"],
-            "author_found": data["author"]["name"].replace(" e ", " and "),
-            "price": data["offers"]["price"],
-            "pages": data["numberOfPages"],
+            "title_found": data.get("name", ""),
+            "author_found": author_found.replace(" e ", " and "),
+            "price": data.get("offers", {}).get("price", 0.0),
+            "pages": data.get("numberOfPages", 0),
             "on_sale": bool(soup.find("s", class_="text-red text-align-right")),
-            "status": "Available" if soup.find("div", class_="right d-flex flex-column").find("span", class_="price text-black text-align-right") else "Unavailable",
+            "status": "Available" if right_flex and right_flex.find("span", class_="price text-black text-align-right") else "Unavailable",
             "link": final_url
         }
     

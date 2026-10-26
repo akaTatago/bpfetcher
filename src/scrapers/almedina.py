@@ -15,29 +15,40 @@ class AlmedinaScraper(BaseScraper):
             url = f"{self.base_url}/catalogsearch/result/?q={isbn}"
 
         soup, response_link = get_soup(url)
-        if not soup or not soup.find("script", type="application/ld+json"): return None
+        if not soup or not soup.find("script", type="application/ld+json"): 
+            return None
 
         data = json.loads(soup.find("script", type="application/ld+json").string)
 
         prod = soup.find("div", class_="product-info-main")
-        price_area = prod.find("div", class_="price-box")
+        price_area = prod.find("div", class_="price-box") if prod else None
+        availability_tag = prod.find("div", class_="availability") if prod else None
 
         pages = 0
-        for row in prod.find_all("tr"):
-            th, td = row.find("th"), row.find("td")
-            if th and td and "páginas" in clean_text(th).lower():
-                value = clean_text(td)
-                pages = int(value) if value.isdigit() else 0
-                break
+        if prod:
+            for row in prod.find_all("tr"):
+                th, td = row.find("th"), row.find("td")
+                if th and td and "páginas" in clean_text(th).lower():
+                    value = clean_text(td)
+                    pages = int(value) if value.isdigit() else 0
+                    break
+
+        authors_data = data.get("author", {})
+        if isinstance(authors_data, list):
+            author_found = " e ".join([a.get("name", "") for a in authors_data])
+        elif isinstance(authors_data, dict):
+            author_found = authors_data.get("name", "")
+        else:
+            author_found = str(authors_data)
 
         return {
             "store": self.store_name,
-            "title_found": data["name"],
-            "author_found": data["author"]["name"].replace(" e ", " and "),
-            "price": data["offers"]["price"],
+            "title_found": data.get("name", ""),
+            "author_found": author_found.replace(" e ", " and "),
+            "price": data.get("offers", {}).get("price", 0.0),
             "pages": pages,
-            "on_sale": bool(price_area.find("span", class_="special-price")),
-            "status": "Unavailable" if "Indisponível" in prod.find("div", class_="availability").text else "Available",
+            "on_sale": bool(price_area.find("span", class_="special-price")) if price_area else False,
+            "status": "Unavailable" if availability_tag and "Indisponível" in availability_tag.text else "Available",
             "link": response_link
         }
     
