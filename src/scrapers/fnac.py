@@ -1,152 +1,253 @@
-import urllib.parse
+import json
+import os
+import re
 import time
-import random
-from playwright.sync_api import sync_playwright
+import urllib.parse
 from bs4 import BeautifulSoup
+from patchright.sync_api import sync_playwright
 from .base_scraper import BaseScraper
-from src.utils.scraping_helper import clean_text, clean_price, normalize, normalize_isbn
+from src.utils.scraping_helper import clean_text, clean_price, normalize_isbn, normalize
+
 
 class FnacScraper(BaseScraper):
-
     def __init__(self):
         super().__init__("Fnac", "https://www.fnac.pt")
-        self.p = sync_playwright().start()
-        self.browser = self.p.chromium.launch(
-            headless=False,
-            args=["--disable-blink-features=AutomationControlled", "--start-maximized"]
-        )
-        self.context = self.browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            viewport={'width': 1920, 'height': 1080}
-        )
-        self.context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-        
-        self.page = self.context.new_page()
-        
-        try:
-            self.page.goto(self.base_url, timeout=30000, wait_until="domcontentloaded")
-            self._handle_captcha()
-            self._reject_cookies()
-        except Exception as e:
-            print(f"[FNAC INIT ERROR] {e}")
+        self.playwright = None
+        self.context = None
+        self.page = None
+        self._init_browser()
 
-    def close(self):
-        try:
-            self.browser.close()
-            self.p.stop()
-        except:
-            pass
+    def _init_browser(self):
+        print("\n[Fnac] Starting browser session...")
+        profile_dir = os.path.join(os.getcwd(), ".fnac_browser_profile")
+        os.makedirs(profile_dir, exist_ok=True)
 
-    def _reject_cookies(self):
-        try:
-            if self.page.is_visible("#onetrust-accept-btn-handler"):
-                self.page.click("#onetrust-accept-btn-handler")
-        except:
-            pass
+        self.playwright = sync_playwright().start()
 
-    def _handle_captcha(self):
-        if "https://ct.captcha-delivery.com/c.js" in self.page.content().lower():
-            print("\n" + "!"*50)
-            print("[FNAC] CAPTCHA DETECTED!")
-            print("Go to the open Chrome window")
-            print("Solve the CAPTCHA")
-            input("Press ENTER in this terminal when the Fnac search page completes loading...")
-            print("!"*50 + "\n")
-            return True
-        return False
-
-    def _get_soup_internal(self, url):
-        try:
-            time.sleep(random.uniform(1.5, 3))
-            self.page.goto(url, wait_until="domcontentloaded", timeout=45000)
-            
-            self._handle_captcha()
-            
-            content = self.page.content()
-            if "<body></body>" in content:
-                self.page.wait_for_selector("footer", timeout=5000)
-                content = self.page.content()
-
-            return BeautifulSoup(content, "lxml")
-        except Exception as e:
-            print(f"[FNAC ERROR] {url}: {e}")
-            return None
-
-    def _validate_match(self, search_title, search_author, found_title, found_author):
-        n_title = normalize(search_title)
-        f_title = normalize(found_title)
-
-        if n_title == f_title:
-            return True
-        return super()._validate_match(search_title, search_author, found_title, found_author)
-    
-    def _extract_product_data(self, prod):
-        title_elem = prod.find("p", class_="Article-desc")
-        author_elem = prod.find("p", class_="Article-descSub")
-        if not title_elem: return None
-
-        title_link = title_elem.find("a")
-        found_title = clean_text(title_elem)
-        
-        found_author = clean_text(author_elem.find("a")) if author_elem.find("a") else clean_text(author_elem)[:clean_text(author_elem).find('-')-1] 
-
-        price_area = prod.find("div", class_="bigPricerFA")
-        price = 0.0
-        if price_area:
-            price_tag = price_area.find("strong", class_="userPrice")
-            
-            if not price_tag:
-                all_prices = price_area.find_all("span", class_="price")
-                if len(all_prices) >= 1:
-                    price_tag = all_prices[-1]
-                else:
-                    price_tag = None
-            price = clean_price(price_tag)
-
-        return {
-            "store": self.store_name,
-            "title_found": found_title,
-            "author_found": found_author,
-            "price": price,
-            "on_sale": bool(prod.find("del", class_="oldPrice")),
-            "status": "Available" if price > 0 else "Unavailable",
-            "link": title_link['href'] if title_link else ""
+        launch_kwargs = {
+            "user_data_dir": profile_dir,
+            "headless": False,
+            "locale": "pt-PT",
+            "viewport": {"width": 1280, "height": 800},
         }
-    
+
+        try:
+            self.context = self.playwright.chromium.launch_persistent_context(
+                channel="chrome",
+                **launch_kwargs
+            )
+        except Exception:
+            self.context = self.playwright.chromium.launch_persistent_context(
+                **launch_kwargs
+            )
+
+        self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
+
+        def _block_heavy_assets(route):
+            if route.request.resource_type in ("image", "media", "font"):
+                route.abort()
+            else:
+                route.continue_()
+
+        self.page.route("**/*", _block_heavy_assets)
+
+    def _get_fnac_soup(self, url):
+        try:
+            time.sleep(1.5)
+            self.page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            time.sleep(1.5)
+
+            html = self.page.content()
+
+            if "O acesso está temporariamente restrito" in html or "Access is temporarily restricted" in html:
+                print("\n[Fnac] Blocked by DataDome (IP temporarily restricted).")
+                print("[Fnac] Please switch network/IP (e.g., router restart or hotspot) and press ENTER to retry...")
+                input()
+                self.page.reload(wait_until="domcontentloaded", timeout=30000)
+                time.sleep(2)
+                html = self.page.content()
+
+            if "captcha-delivery.com" in html:
+                print("\n[Fnac] CAPTCHA detected! Please solve it in the browser window...")
+                self.page.wait_for_selector("article.Article-itemGroup, .f-productHeader, header", timeout=120000)
+                time.sleep(2)
+                html = self.page.content()
+
+            return BeautifulSoup(html, "lxml"), self.page.url
+
+        except Exception as e:
+            print(f"[Fnac] Navigation error ({url}): {e}")
+            return None, None
+
+    def _extract_product_jsonld(self, soup):
+        for script in soup.find_all("script", type="application/ld+json"):
+            if not script.string:
+                continue
+            try:
+                parsed = json.loads(script.string)
+                items = parsed if isinstance(parsed, list) else [parsed]
+                for item in items:
+                    if item.get("@type") == "Product":
+                        return item
+            except json.JSONDecodeError:
+                continue
+        return None
+
+    def _is_marketplace(self, url):
+        return bool(url and re.search(r"/mp\d+", url))
+
     def scrape_by_isbn(self, isbn):
         isbn = normalize_isbn(isbn)
         url = f"{self.base_url}/SearchResult/ResultList.aspx?Search={isbn}&sft=1&sa=0"
-        
-        soup = self._get_soup_internal(url)
-        
-        if not soup: return None
-        first_prod = soup.find("article", class_="Article-itemGroup")
-        return self._extract_product_data(first_prod) if first_prod else None
-    
+
+        soup, response_url = self._get_fnac_soup(url)
+        if not soup:
+            return None
+
+        data = self._extract_product_jsonld(soup)
+        final_url = response_url
+
+        if not data:
+            prod = soup.find("article", class_="Article-itemGroup")
+            if not prod:
+                return None
+            title_link = prod.find("a", class_="Article-title")
+            if not title_link or not title_link.get("href"):
+                return None
+
+            prod_url = title_link["href"]
+            if not prod_url.startswith("http"):
+                prod_url = self.base_url + prod_url
+
+            soup, final_url = self._get_fnac_soup(prod_url)
+            if not soup or self._is_marketplace(final_url):
+                return None
+            data = self._extract_product_jsonld(soup)
+
+        if not data:
+            return None
+
+        authors_data = data.get("author", [])
+        if isinstance(authors_data, list):
+            author_found = " e ".join([a.get("name", "") for a in authors_data if isinstance(a, dict)])
+        elif isinstance(authors_data, dict):
+            author_found = authors_data.get("name", "")
+        else:
+            author_found = str(authors_data)
+
+        offers = data.get("offers", {})
+        if isinstance(offers, list):
+            offers = offers[0] if offers else {}
+
+        price = float(offers.get("price", 0.0) or 0.0)
+        availability_url = offers.get("availability", "")
+        is_available = "InStock" in availability_url and price > 0
+
+        on_sale = False
+        active_offer = None
+
+        for wrapper in soup.find_all("div", class_="f-faPriceBox__radioWrapper"):
+            if wrapper.find("input", {"name": "fnacoffer", "checked": True}) or wrapper.find(class_="checked"):
+                active_offer = wrapper
+                break
+
+        if active_offer:
+            on_sale = bool(
+                active_offer.find("strong", class_="f-faPriceBox__price--striked")
+                or active_offer.find(class_="f-faPriceBox__stimuliOpcLabel")
+            )
+        else:
+            on_sale = bool(soup.find("strong", class_="f-faPriceBox__price--striked"))
+
+        pages = data.get("numberOfPages", 0) or 0
+        if not pages:
+            for item in soup.find_all("dl", class_="f-productProperties__item"):
+                term = item.find("dt", class_="f-productProperties__term")
+                definition = item.find("dd", class_="f-productProperties__definition")
+                if term and definition and "páginas" in clean_text(term).lower():
+                    val = clean_text(definition)
+                    if val and val.isdigit():
+                        pages = int(val)
+                        break
+
+
+        return {
+            "store": self.store_name,
+            "title_found": data.get("name", ""),
+            "author_found": author_found,
+            "price": price,
+            "pages": pages,
+            "on_sale": on_sale,
+            "status": "Available" if is_available else "Unavailable",
+            "link": final_url
+        }
+
     def search_by_text(self, title, author):
-        query = urllib.parse.quote(title.lower()).replace('%20', '+')
+        safe_title = normalize(title) or title
+        safe_author = normalize(author) or author
+        query = urllib.parse.quote(f"{safe_title} {safe_author}".lower())
         url = f"{self.base_url}/SearchResult/ResultList.aspx?Search={query}&sft=1&sa=0"
 
-        soup = self._get_soup_internal(url)
-        
-        if not soup: return []
+        soup, _ = self._get_fnac_soup(url)
+        products = soup.find_all("article", class_="Article-itemGroup") if soup else []
+
+        if not products:
+            query = urllib.parse.quote(safe_title.lower())
+            url = f"{self.base_url}/SearchResult/ResultList.aspx?Search={query}&sft=1&sa=0"
+            soup, _ = self._get_fnac_soup(url)
+            products = soup.find_all("article", class_="Article-itemGroup") if soup else []
+
+        if not products:
+            return []
 
         results = []
         unmatches = 0
-        products = soup.find_all("div", class_="Article-item")
-        
+
         for prod in products:
             if unmatches >= 10:
                 break
 
-            data = self._extract_product_data(prod)
-            if not data:
+            title_tag = prod.find("a", class_="Article-title")
+            author_tag = prod.find(class_="Article-descSub")
+
+            if not title_tag or not author_tag:
                 unmatches += 1
                 continue
-            
-            if self._validate_match(title, author, data["title_found"], data["author_found"]):
-                results.append(data)
+
+            link = title_tag.get("href", "")
+            if self._is_marketplace(link):
+                continue
+
+            f_title = clean_text(title_tag)
+            author_links = author_tag.find_all("a")
+            if author_links:
+                f_author = " e ".join([a.get_text(strip=True) for a in author_links])
+            else:
+                f_author = clean_text(author_tag)
+
+            if self._validate_match(title, author, f_title, f_author):
+                price_tag = prod.find(class_="userPrice")
+                price = clean_price(price_tag)
+                link = title_tag.get("href", "")
+                if link and not link.startswith("http"):
+                    link = self.base_url + link
+
+                results.append({
+                    "store": self.store_name,
+                    "title_found": f_title,
+                    "author_found": f_author.strip(),
+                    "price": price,
+                    "on_sale": bool(prod.find(class_="oldPrice")),
+                    "status": "Available" if price > 0 else "Unavailable",
+                    "link": link
+                })
             else:
                 unmatches += 1
-    
+
         return results
+
+    def close(self):
+        if self.context:
+            self.context.close()
+        if self.playwright:
+            self.playwright.stop()

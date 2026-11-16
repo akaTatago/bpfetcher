@@ -1,6 +1,6 @@
 beautifulsoup4
 lxml
-playwright
+patchright
 curl-cffi
 pandas
 unidecode
