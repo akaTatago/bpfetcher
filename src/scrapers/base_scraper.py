@@ -1,4 +1,5 @@
 import re
+from urllib.parse import urljoin
 from unidecode import unidecode
 from abc import ABC, abstractmethod
 from src.utils.scraping_helper import normalize
@@ -10,11 +11,15 @@ class BaseScraper(ABC):
 
     @abstractmethod
     def search_by_text(self, title, author):
-        pass
+        """return list of BookOffer"""
 
     @abstractmethod
     def scrape_by_isbn(self, isbn):
-        pass
+        """return a BookOffer"""
+
+    def absolute_url(self, href):
+        """turn href into URL"""
+        return urljoin(self.base_url, href) if href else ""
 
     def close(self):
         pass

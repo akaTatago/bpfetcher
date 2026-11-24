@@ -49,6 +49,8 @@ def load_books(file_path, mode='isbn'):
 def save_results(data, output_path):
     try:
         df = pd.DataFrame(data)
+        if "Pages" in df.columns:
+            df["Pages"] = df["Pages"].astype("Int64")
         output_dir = os.path.dirname(output_path)
         if output_dir:
             os.makedirs(output_dir, exist_ok=True)

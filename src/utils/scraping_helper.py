@@ -115,19 +115,21 @@ def parse_jsonld_product(soup):
                 return item
     return None
 
+#join author names
+def join_authors(names):
+    return AUTHOR_SEPARATOR.join(n.strip() for n in names if n and n.strip())
 
+#join authors of a json-ld block
 def parse_authors(author_data):
     if not author_data:
         return ""
     if isinstance(author_data, (dict, str)):
         author_data = [author_data]
 
-    names = []
-    for author in author_data:
-        name = author.get("name", "") if isinstance(author, dict) else str(author)
-        if name.strip():
-            names.append(name.strip())
-    return AUTHOR_SEPARATOR.join(names)
+    return join_authors(
+        a.get("name", "") if isinstance(a, dict) else str(a)
+        for a in author_data
+    )
 
 
 def parse_offer(data):

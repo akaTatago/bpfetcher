@@ -5,9 +5,10 @@ import urllib.parse
 from bs4 import BeautifulSoup
 from patchright.sync_api import sync_playwright
 from .base_scraper import BaseScraper
+from src.models import BookOffer, Status
 from src.utils.scraping_helper import (
     clean_text, clean_price, normalize_isbn, normalize,
-    parse_jsonld_product, parse_authors, parse_offer, parse_int
+    join_authors, parse_jsonld_product, parse_offer, parse_int
 )
 
 
@@ -103,11 +104,7 @@ class FnacScraper(BaseScraper):
             if not title_link or not title_link.get("href"):
                 return None
 
-            prod_url = title_link["href"]
-            if not prod_url.startswith("http"):
-                prod_url = self.base_url + prod_url
-
-            soup, final_url = self._get_fnac_soup(prod_url)
+            soup, final_url = self._get_fnac_soup(self.absolute_url(title_link["href"]))
             if not soup or self._is_marketplace(final_url):
                 return None
             data = parse_jsonld_product(soup)
@@ -115,48 +112,35 @@ class FnacScraper(BaseScraper):
         if not data:
             return None
 
-        author_found = parse_authors(data.get("author"))
+        offer = BookOffer.from_jsonld(self.store_name, data, final_url)
 
-        price, availability_url = parse_offer(data)
-        is_available = "InStock" in availability_url and bool(price)
+        _, availability_url = parse_offer(data)
+        offer.status = Status.from_bool("InStock" in availability_url and bool(offer.price))
 
-        on_sale = False
         active_offer = None
-
         for wrapper in soup.find_all("div", class_="f-faPriceBox__radioWrapper"):
             if wrapper.find("input", {"name": "fnacoffer", "checked": True}) or wrapper.find(class_="checked"):
                 active_offer = wrapper
                 break
 
         if active_offer:
-            on_sale = bool(
+            offer.on_sale = bool(
                 active_offer.find("strong", class_="f-faPriceBox__price--striked")
                 or active_offer.find(class_="f-faPriceBox__stimuliOpcLabel")
             )
         else:
-            on_sale = bool(soup.find("strong", class_="f-faPriceBox__price--striked"))
+            offer.on_sale = bool(soup.find("strong", class_="f-faPriceBox__price--striked"))
 
-        pages = parse_int(data.get("numberOfPages"))
-        if not pages:
+        if not offer.pages:
             for item in soup.find_all("dl", class_="f-productProperties__item"):
                 term = item.find("dt", class_="f-productProperties__term")
                 definition = item.find("dd", class_="f-productProperties__definition")
                 if term and definition and "páginas" in clean_text(term).lower():
-                    pages = parse_int(clean_text(definition))
-                    if pages:
+                    offer.pages = parse_int(clean_text(definition))
+                    if offer.pages:
                         break
 
-
-        return {
-            "store": self.store_name,
-            "title_found": data.get("name", ""),
-            "author_found": author_found,
-            "price": price,
-            "pages": pages,
-            "on_sale": on_sale,
-            "status": "Available" if is_available else "Unavailable",
-            "link": final_url
-        }
+        return offer
 
     def search_by_text(self, title, author):
         safe_title = normalize(title) or title
@@ -197,26 +181,22 @@ class FnacScraper(BaseScraper):
             f_title = clean_text(title_tag)
             author_links = author_tag.find_all("a")
             if author_links:
-                f_author = " e ".join([a.get_text(strip=True) for a in author_links])
+                f_author = join_authors(a.get_text(strip=True) for a in author_links)
             else:
                 f_author = clean_text(author_tag)
 
             if self._validate_match(title, author, f_title, f_author):
-                price_tag = prod.find(class_="userPrice")
-                price = clean_price(price_tag)
-                link = title_tag.get("href", "")
-                if link and not link.startswith("http"):
-                    link = self.base_url + link
+                price = clean_price(prod.find(class_="userPrice"))
 
-                results.append({
-                    "store": self.store_name,
-                    "title_found": f_title,
-                    "author_found": f_author.strip(),
-                    "price": price,
-                    "on_sale": bool(prod.find(class_="oldPrice")),
-                    "status": "Available" if price else "Unavailable",
-                    "link": link
-                })
+                results.append(BookOffer(
+                    store=self.store_name,
+                    title_found=f_title,
+                    author_found=f_author,
+                    price=price,
+                    on_sale=bool(prod.find(class_="oldPrice")),
+                    status=Status.from_bool(price),
+                    link=self.absolute_url(link)
+                ))
             else:
                 unmatches += 1
 

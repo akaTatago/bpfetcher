@@ -1,9 +1,8 @@
 import urllib.parse
-from urllib.parse import urljoin
 from .base_scraper import BaseScraper
+from src.models import BookOffer, Status
 from src.utils.scraping_helper import (
-    get_soup, clean_text, clean_price, normalize_isbn,
-    parse_jsonld_product, parse_authors, parse_offer, parse_int
+    get_soup, clean_text, clean_price, normalize_isbn, parse_jsonld_product
 )
 
 class WookScraper(BaseScraper):
@@ -25,19 +24,15 @@ class WookScraper(BaseScraper):
         if not data:
             return None
 
-        price, _ = parse_offer(data)
         right_flex = soup.find("div", class_="right d-flex flex-column")
 
-        return {
-            "store": self.store_name,
-            "title_found": data.get("name", ""),
-            "author_found": parse_authors(data.get("author")),
-            "price": price,
-            "pages": parse_int(data.get("numberOfPages")),
-            "on_sale": bool(soup.find("s", class_="text-red text-align-right")),
-            "status": "Available" if right_flex and right_flex.find("span", class_="price text-black text-align-right") else "Unavailable",
-            "link": final_url
-        }
+        offer = BookOffer.from_jsonld(self.store_name, data, final_url)
+        offer.on_sale = bool(soup.find("s", class_="text-red text-align-right"))
+        offer.status = Status.from_bool(
+            right_flex and right_flex.find("span", class_="price text-black text-align-right")
+        )
+
+        return offer
     
     def search_by_text(self, title, author):
         query = urllib.parse.quote(f"{title} {author}".lower())
@@ -75,19 +70,15 @@ class WookScraper(BaseScraper):
                 price_tag = prod.find("span", class_="pvp")
                 price = clean_price(price_tag.find("span", class_="font-bold")) if price_tag else None
 
-                on_sale = False
-                if price_tag:
-                    on_sale = bool(price_tag.find("s", class_="text-red"))
-
-                results.append({
-                    "store": self.store_name,
-                    "title_found": f_title,
-                    "author_found": f_author,
-                    "price": price,
-                    "on_sale": on_sale,
-                    "status": "Available" if price else "Unavailable",
-                    "link": urljoin(self.base_url, link_tag["href"])
-                })
+                results.append(BookOffer(
+                    store=self.store_name,
+                    title_found=f_title,
+                    author_found=f_author,
+                    price=price,
+                    on_sale=bool(price_tag and price_tag.find("s", class_="text-red")),
+                    status=Status.from_bool(price),
+                    link=self.absolute_url(link_tag["href"])
+                ))
             else:
                 unmatches += 1
 

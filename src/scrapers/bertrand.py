@@ -1,9 +1,9 @@
 import urllib.parse
-from urllib.parse import urljoin
 from .base_scraper import BaseScraper
+from src.models import BookOffer, Status
 from src.utils.scraping_helper import (
     get_soup, clean_text, clean_price, normalize_isbn, normalize,
-    parse_jsonld_product, parse_authors, parse_offer, parse_int
+    has_text, join_authors, parse_jsonld_product
 )
 
 class BertrandScraper(BaseScraper):
@@ -21,28 +21,19 @@ class BertrandScraper(BaseScraper):
         link_tag = prod.find("a", class_="track", href=True)
         if not link_tag: return None
 
-        prod_url = urljoin(self.base_url, link_tag["href"])
-
-        soup, final_url = get_soup(prod_url)
+        soup, final_url = get_soup(self.absolute_url(link_tag["href"]))
         if not soup: return None
 
         data = parse_jsonld_product(soup)
         if not data:
             return None
 
-        price, _ = parse_offer(data)
-        availability_tag = soup.find("span", class_="availability")
-
-        return {
-            "store": self.store_name,
-            "title_found": data.get("name", ""),
-            "author_found": parse_authors(data.get("author")),
-            "price": price,
-            "pages": parse_int(data.get("numberOfPages")),
-            "on_sale": bool(soup.find("span", class_="old")),
-            "status": "Unavailable" if availability_tag and "Esgotado" in clean_text(availability_tag) else "Available",
-            "link": final_url
-        }
+        offer = BookOffer.from_jsonld(self.store_name, data, final_url)
+        offer.on_sale = bool(soup.find("span", class_="old"))
+        offer.status = Status.from_bool(
+            not has_text(soup.find("span", class_="availability"), "Esgotado")
+        )
+        return offer
 
     def search_by_text(self, title, author):
         safe_title = normalize(title) or title
@@ -78,20 +69,18 @@ class BertrandScraper(BaseScraper):
                 continue
 
             f_title = clean_text(title_tag)
-            f_author = " e ".join([a.get_text(strip=True) for a in author_tag.find_all("a")])
+            f_author = join_authors(a.get_text(strip=True) for a in author_tag.find_all("a"))
 
             if self._validate_match(title, author, f_title, f_author):
-                price = clean_price(prod.find("span", class_="pch__price-current"))
-
-                results.append({
-                    "store": self.store_name,
-                    "title_found": f_title,
-                    "author_found": f_author.strip(),
-                    "price": price,
-                    "on_sale": bool(prod.find("span", class_="pch__price-old")),
-                    "status": "Unavailable" if prod.find("p", class_="pch__unavailable") else "Available",
-                    "link": urljoin(self.base_url, link_tag["href"])
-                })
+                results.append(BookOffer(
+                    store=self.store_name,
+                    title_found=f_title,
+                    author_found=f_author,
+                    price=clean_price(prod.find("span", class_="pch__price-current")),
+                    on_sale=bool(prod.find("span", class_="pch__price-old")),
+                    status=Status.from_bool(not prod.find("p", class_="pch__unavailable")),
+                    link=self.absolute_url(link_tag["href"])
+                ))
             else:
                 unmatches += 1
 

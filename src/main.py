@@ -4,6 +4,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeRemainingColumn
 
+from src.models import BookOffer
 from src.utils.csv_helper import load_books, save_results
 
 from src.scrapers.wook import WookScraper
@@ -142,29 +143,8 @@ def main():
                             console.print_exception()
 
                     
-                    if book_results:
-                        for item in book_results:
-                            row = book.copy()
-                            row['Store'] = item.get('store')
-                            row['Title Found'] = item.get('title_found')
-                            row['Author Found'] = item.get('author_found')
-                            row['Status'] = item.get('status', 'Unavailable')
-                            row['Price'] = item.get('price')
-                            row['Pages'] = item.get('pages')
-                            row['On Sale'] = "Yes" if item.get('on_sale') else "No"
-                            row['Link'] = item.get('link', '')
-                            results.append(row)
-                    else:
-                        row = book.copy()
-                        row['Store'] = 'N/A'
-                        row['Title Found'] = ''
-                        row['Author Found'] = ''
-                        row['Status'] = 'Not found'
-                        row['Price'] = None
-                        row['Pages'] = None
-                        row['On Sale'] = 'No'
-                        row['Link'] = ''
-                        results.append(row)
+                    for item in book_results or [BookOffer.not_found()]:
+                        results.append({**book, **item.to_row()})
 
                     progress.advance(task)
                     

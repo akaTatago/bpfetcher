@@ -1,8 +1,9 @@
 import urllib.parse
 from .base_scraper import BaseScraper
+from src.models import BookOffer, Status
 from src.utils.scraping_helper import (
     get_soup, clean_text, clean_price, normalize_isbn, has_text,
-    parse_jsonld_product, parse_authors, parse_offer, parse_int
+    parse_jsonld_product, parse_int
 )
 
 class AlmedinaScraper(BaseScraper):
@@ -28,26 +29,18 @@ class AlmedinaScraper(BaseScraper):
         price_area = prod.find("div", class_="price-box") if prod else None
         availability_tag = prod.find("div", class_="availability") if prod else None
 
-        pages = None
+        offer = BookOffer.from_jsonld(self.store_name, data, response_link)
+        offer.on_sale = bool(price_area and price_area.find("span", class_="special-price"))
+        offer.status = Status.from_bool(not has_text(availability_tag, "Indisponível"))
+
         if prod:
             for row in prod.find_all("tr"):
                 th, td = row.find("th"), row.find("td")
                 if th and td and "páginas" in clean_text(th).lower():
-                    pages = parse_int(clean_text(td))
+                    offer.pages = parse_int(clean_text(td)) or offer.pages
                     break
 
-        price, _ = parse_offer(data)
-
-        return {
-            "store": self.store_name,
-            "title_found": data.get("name", ""),
-            "author_found": parse_authors(data.get("author")),
-            "price": price,
-            "pages": pages,
-            "on_sale": bool(price_area.find("span", class_="special-price")) if price_area else False,
-            "status": "Unavailable" if has_text(availability_tag, "Indisponível") else "Available",
-            "link": response_link
-        }
+        return offer
     
     def search_by_text(self, title, author):
         query = urllib.parse.quote(f"{title} {author}".lower())
@@ -88,17 +81,16 @@ class AlmedinaScraper(BaseScraper):
 
             if self._validate_match(title, author, f_title, f_author):
                 price_area = prod.find("div", class_="price-box")
-                price = clean_price(price_area.find("span", class_="price")) if price_area else None
 
-                results.append({
-                    "store": self.store_name,
-                    "title_found": f_title,
-                    "author_found": f_author,
-                    "price": price,
-                    "on_sale": bool(price_area and price_area.find("span", class_="old-price")),
-                    "status": "Unavailable" if has_text(info.find("p", class_="availability"), "Indisponível") else "Available",
-                    "link": link_tag["href"]
-                })
+                results.append(BookOffer(
+                    store=self.store_name,
+                    title_found=f_title,
+                    author_found=f_author,
+                    price=clean_price(price_area.find("span", class_="price")) if price_area else None,
+                    on_sale=bool(price_area and price_area.find("span", class_="old-price")),
+                    status=Status.from_bool(not has_text(info.find("p", class_="availability"), "Indisponível")),
+                    link=self.absolute_url(link_tag["href"])
+                ))
             else:
                 unmatches += 1
 
