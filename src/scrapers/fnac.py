@@ -1,4 +1,3 @@
-import json
 import os
 import re
 import time
@@ -6,7 +5,10 @@ import urllib.parse
 from bs4 import BeautifulSoup
 from patchright.sync_api import sync_playwright
 from .base_scraper import BaseScraper
-from src.utils.scraping_helper import clean_text, clean_price, normalize_isbn, normalize
+from src.utils.scraping_helper import (
+    clean_text, clean_price, normalize_isbn, normalize,
+    parse_jsonld_product, parse_authors, parse_offer, parse_int
+)
 
 
 class FnacScraper(BaseScraper):
@@ -79,20 +81,6 @@ class FnacScraper(BaseScraper):
             print(f"[Fnac] Navigation error ({url}): {e}")
             return None, None
 
-    def _extract_product_jsonld(self, soup):
-        for script in soup.find_all("script", type="application/ld+json"):
-            if not script.string:
-                continue
-            try:
-                parsed = json.loads(script.string)
-                items = parsed if isinstance(parsed, list) else [parsed]
-                for item in items:
-                    if item.get("@type") == "Product":
-                        return item
-            except json.JSONDecodeError:
-                continue
-        return None
-
     def _is_marketplace(self, url):
         return bool(url and re.search(r"/mp\d+", url))
 
@@ -104,7 +92,7 @@ class FnacScraper(BaseScraper):
         if not soup:
             return None
 
-        data = self._extract_product_jsonld(soup)
+        data = parse_jsonld_product(soup)
         final_url = response_url
 
         if not data:
@@ -122,26 +110,15 @@ class FnacScraper(BaseScraper):
             soup, final_url = self._get_fnac_soup(prod_url)
             if not soup or self._is_marketplace(final_url):
                 return None
-            data = self._extract_product_jsonld(soup)
+            data = parse_jsonld_product(soup)
 
         if not data:
             return None
 
-        authors_data = data.get("author", [])
-        if isinstance(authors_data, list):
-            author_found = " e ".join([a.get("name", "") for a in authors_data if isinstance(a, dict)])
-        elif isinstance(authors_data, dict):
-            author_found = authors_data.get("name", "")
-        else:
-            author_found = str(authors_data)
+        author_found = parse_authors(data.get("author"))
 
-        offers = data.get("offers", {})
-        if isinstance(offers, list):
-            offers = offers[0] if offers else {}
-
-        price = float(offers.get("price", 0.0) or 0.0)
-        availability_url = offers.get("availability", "")
-        is_available = "InStock" in availability_url and price > 0
+        price, availability_url = parse_offer(data)
+        is_available = "InStock" in availability_url and bool(price)
 
         on_sale = False
         active_offer = None
@@ -159,15 +136,14 @@ class FnacScraper(BaseScraper):
         else:
             on_sale = bool(soup.find("strong", class_="f-faPriceBox__price--striked"))
 
-        pages = data.get("numberOfPages", 0) or 0
+        pages = parse_int(data.get("numberOfPages"))
         if not pages:
             for item in soup.find_all("dl", class_="f-productProperties__item"):
                 term = item.find("dt", class_="f-productProperties__term")
                 definition = item.find("dd", class_="f-productProperties__definition")
                 if term and definition and "páginas" in clean_text(term).lower():
-                    val = clean_text(definition)
-                    if val and val.isdigit():
-                        pages = int(val)
+                    pages = parse_int(clean_text(definition))
+                    if pages:
                         break
 
 
@@ -238,7 +214,7 @@ class FnacScraper(BaseScraper):
                     "author_found": f_author.strip(),
                     "price": price,
                     "on_sale": bool(prod.find(class_="oldPrice")),
-                    "status": "Available" if price > 0 else "Unavailable",
+                    "status": "Available" if price else "Unavailable",
                     "link": link
                 })
             else:

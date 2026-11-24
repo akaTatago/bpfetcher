@@ -1,8 +1,7 @@
-import time
-import random
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from rich.console import Console
+from rich.markup import escape
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeRemainingColumn
 
 from src.utils.csv_helper import load_books, save_results
@@ -32,9 +31,7 @@ def main():
 
     console.print("\n[bold yellow]--- BPFetcher CLI ---[/bold yellow]")
 
-    with console.status("[bold dodger_blue1]Reading CSV file...[/bold dodger_blue1]", spinner="dots"):
-        books = load_books(args.input_file, mode=args.mode)
-        time.sleep(0.5)
+    books = load_books(args.input_file, mode=args.mode)
 
     if not books:
         console.print("[bold red]Empty input file or missing required columns.[/bold red]")
@@ -70,6 +67,7 @@ def main():
     console.print(f"Bookstores scraped: [dodger_blue1]{', '.join(names)}[/dodger_blue1]")
     
     results = []
+    completed = False
 
     try:
         with Progress(
@@ -87,7 +85,8 @@ def main():
             with ThreadPoolExecutor(max_workers=max_threads) as executor:
 
                 for book in books:
-                    progress.update(task)
+                    label = book.get("Identifier" if args.mode == "isbn" else "Title", "")
+                    progress.update(task, description=f"[dodger_blue1]{escape(str(label))}")
                     
                     book_results = [] 
                     
@@ -117,7 +116,7 @@ def main():
                                 else:
                                     book_results.append(data)
                         except Exception as e:
-                            console.print(f"[bold red]Erro no scraper {scraper.store_name}: {e}[/bold red]")
+                            console.print(f"[bold red]Error in scraper {scraper.store_name}: {e}[/bold red]")
                             console.print_exception()
 
                     for scraper in browser_scrapers:
@@ -139,7 +138,7 @@ def main():
                                 else:
                                     book_results.append(data)
                         except Exception as e:
-                            console.print(f"[bold red]Erro no scraper {scraper.store_name}: {e}[/bold red]")
+                            console.print(f"[bold red]Error in scraper {scraper.store_name}: {e}[/bold red]")
                             console.print_exception()
 
                     
@@ -150,8 +149,8 @@ def main():
                             row['Title Found'] = item.get('title_found')
                             row['Author Found'] = item.get('author_found')
                             row['Status'] = item.get('status', 'Unavailable')
-                            row['Price'] = item.get('price', 0.0)
-                            row['Pages'] = item.get('pages', 0)
+                            row['Price'] = item.get('price')
+                            row['Pages'] = item.get('pages')
                             row['On Sale'] = "Yes" if item.get('on_sale') else "No"
                             row['Link'] = item.get('link', '')
                             results.append(row)
@@ -161,26 +160,35 @@ def main():
                         row['Title Found'] = ''
                         row['Author Found'] = ''
                         row['Status'] = 'Not found'
-                        row['Price'] = 0.0
-                        row['Pages'] = 0
+                        row['Price'] = None
+                        row['Pages'] = None
                         row['On Sale'] = 'No'
                         row['Link'] = ''
                         results.append(row)
 
                     progress.advance(task)
                     
-        if save_results(results, args.output):
-            console.print(f"\n[dodger_blue1]Done![/dodger_blue1] Output saved in: [underline]{args.output}[/underline]")
-        else:
-            console.print("\n[bold red]Saving output file error.[/bold red]")
+        completed = True
 
     except KeyboardInterrupt:
         console.print("\n[bold red]Process interrupted by user.[/bold red]")
-    
+
     finally:
+        # Save first: a failure while closing the browser must never lose the results.
+        if results:
+            if save_results(results, args.output):
+                status = "[dodger_blue1]Done![/dodger_blue1]" if completed else "[yellow]Partial results saved.[/yellow]"
+                console.print(f"\n{status} Output saved in: [underline]{args.output}[/underline]")
+            else:
+                console.print("\n[bold red]Saving output file error.[/bold red]")
+        else:
+            console.print("\n[yellow]No results to save.[/yellow]")
+
         for scraper in all_active_scrapers:
-            if hasattr(scraper, 'close'):
+            try:
                 scraper.close()
+            except Exception as e:
+                console.print(f"[red]Failed to close {scraper.store_name}: {e}[/red]")
 
 if __name__ == "__main__":
     main()

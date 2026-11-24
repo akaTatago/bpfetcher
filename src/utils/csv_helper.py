@@ -1,6 +1,5 @@
 import pandas as pd
 import os
-import sys
 
 
 def load_books(file_path, mode='isbn'):
@@ -50,7 +49,9 @@ def load_books(file_path, mode='isbn'):
 def save_results(data, output_path):
     try:
         df = pd.DataFrame(data)
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        output_dir = os.path.dirname(output_path)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
         df.to_csv(output_path, index=False, encoding='utf-8-sig')
         return True
     except Exception as e:

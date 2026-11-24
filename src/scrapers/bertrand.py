@@ -1,7 +1,10 @@
-import json
-import re, urllib.parse
+import urllib.parse
+from urllib.parse import urljoin
 from .base_scraper import BaseScraper
-from src.utils.scraping_helper import get_soup, clean_text, clean_price, normalize_isbn, normalize
+from src.utils.scraping_helper import (
+    get_soup, clean_text, clean_price, normalize_isbn, normalize,
+    parse_jsonld_product, parse_authors, parse_offer, parse_int
+)
 
 class BertrandScraper(BaseScraper):
     def __init__(self):
@@ -15,31 +18,27 @@ class BertrandScraper(BaseScraper):
         prod = soup.find("div", class_="pch")
         if not prod: return None
 
-        prod_url = self.base_url + prod.find("a", class_="track")["href"]
+        link_tag = prod.find("a", class_="track", href=True)
+        if not link_tag: return None
+
+        prod_url = urljoin(self.base_url, link_tag["href"])
 
         soup, final_url = get_soup(prod_url)
+        if not soup: return None
 
-        if not soup or not soup.find("script", type="application/ld+json"):
+        data = parse_jsonld_product(soup)
+        if not data:
             return None
 
-        data = json.loads(soup.find("script", type="application/ld+json").string)
-
-        authors_data = data.get("author", [])
-        if isinstance(authors_data, list):
-            author_found = " e ".join([a.get("name", "") for a in authors_data])
-        elif isinstance(authors_data, dict):
-            author_found = authors_data.get("name", "")
-        else:
-            author_found = str(authors_data)
-
+        price, _ = parse_offer(data)
         availability_tag = soup.find("span", class_="availability")
-        
+
         return {
             "store": self.store_name,
             "title_found": data.get("name", ""),
-            "author_found": author_found,
-            "price": data.get("offers", {}).get("price", 0.0),
-            "pages": data.get("numberOfPages", 0),
+            "author_found": parse_authors(data.get("author")),
+            "price": price,
+            "pages": parse_int(data.get("numberOfPages")),
             "on_sale": bool(soup.find("span", class_="old")),
             "status": "Unavailable" if availability_tag and "Esgotado" in clean_text(availability_tag) else "Available",
             "link": final_url
@@ -49,13 +48,13 @@ class BertrandScraper(BaseScraper):
         safe_title = normalize(title) or title
         safe_author = normalize(author) or author
 
-        query = urllib.parse.quote(f"{safe_title} {safe_author}".lower())
+        query = urllib.parse.quote_plus(f"{safe_title} {safe_author}".lower())
         url = f"{self.base_url}/pesquisa/{query}"
         soup, _ = get_soup(url)
         products = soup.find_all("div", class_="pch") if soup else []
         
         if not products:
-            query = urllib.parse.quote(safe_title.lower())
+            query = urllib.parse.quote_plus(safe_title.lower())
             url = f"{self.base_url}/pesquisa/{query}"
             soup, _ = get_soup(url)
             products = soup.find_all("div", class_="pch") if soup else []
@@ -72,8 +71,9 @@ class BertrandScraper(BaseScraper):
 
             title_tag = prod.find("p", class_="pch__title")
             author_tag = prod.find("p", class_="pch__author")
+            link_tag = title_tag.find("a", href=True) if title_tag else None
 
-            if not title_tag or not author_tag: 
+            if not title_tag or not author_tag or not link_tag:
                 unmatches += 1
                 continue
 
@@ -90,7 +90,7 @@ class BertrandScraper(BaseScraper):
                     "price": price,
                     "on_sale": bool(prod.find("span", class_="pch__price-old")),
                     "status": "Unavailable" if prod.find("p", class_="pch__unavailable") else "Available",
-                    "link": self.base_url + title_tag.find("a")["href"]
+                    "link": urljoin(self.base_url, link_tag["href"])
                 })
             else:
                 unmatches += 1

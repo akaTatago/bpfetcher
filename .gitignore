@@ -6,5 +6,4 @@ __pycache__/
 data/*.csv
 !data/.gitkeep
 *.log
-tests/
 .fnac_browser_profile/
