@@ -1,3 +1,5 @@
+import re
+from unidecode import unidecode
 from abc import ABC, abstractmethod
 from src.utils.scraping_helper import normalize
 
@@ -21,9 +23,37 @@ class BaseScraper(ABC):
         n_title, n_author = normalize(search_title), normalize(search_author)
         f_title, f_author = normalize(found_title), normalize(found_author)
 
-        if f_title == None or f_author==None:
+        if not f_title or not f_author:
             return False
-        
-        title_match = n_title in f_title or f_title in n_title
-        author_match = all(name in n_author for name in f_author) or all(name in f_author for name in n_author)
-        return title_match and author_match
+
+        n_author_words = n_author.split()
+        f_author_words = f_author.split()
+        author_match = (
+            all(w in f_author_words for w in n_author_words) or
+            all(w in n_author_words for w in f_author_words)
+        )
+        if not author_match:
+            return False
+
+        raw_n_words = set(re.sub(r'[^\w\s]', ' ', unidecode(search_title.lower())).split())
+        raw_f_words = set(re.sub(r'[^\w\s]', ' ', unidecode(found_title.lower())).split())
+        sequel_markers = {'2', '3', '4', '5', 'ii', 'iii', 'iv', 'parte', 'pack', 'box', 'conjunto'}
+
+        if any(w in sequel_markers and w not in raw_n_words for w in raw_f_words):
+            return False
+
+        if n_title == f_title:
+            return True
+
+        n_words = n_title.split()
+        f_words = f_title.split()
+        if len(f_words) > len(n_words) and f_words[:len(n_words)] == n_words:
+            extra_words = f_words[len(n_words):]
+            edition_markers = {
+                'edicao', 'volume', 'vol', 'bolso', 'capa', 'dura',
+                'ilustrada', 'especial', 'comemorativa', 'definitiva', 'integral', 'unico'
+            }
+            if any(w in edition_markers for w in extra_words):
+                return True
+
+        return False

@@ -3,11 +3,18 @@ from bs4 import BeautifulSoup
 from unidecode import unidecode
 import time
 import random
+import re
 
-def get_soup(url):
+def get_soup(url, cookies=None, headers=None):
     try:
         time.sleep(random.uniform(2, 4))
-        response = requests.get(url, impersonate="chrome", timeout=15)
+        response = requests.get(
+            url,
+            impersonate="chrome",
+            cookies=cookies,
+            headers=headers,
+            timeout=15
+        )
         return BeautifulSoup(response.text, "lxml"), response.url
     except Exception as e:
         print(f"Connection error ({url}): {e}")
@@ -15,18 +22,24 @@ def get_soup(url):
 
 def clean_text(element):
     if element:
-        return element.get_text(separator=" ", strip=True)
+        return " ".join(element.get_text(separator=" ").split())
     return None
 
 def normalize_isbn(isbn):
     return isbn.replace('-', '').strip()
 
 def normalize(text):
-    if text:
-        if text.rfind(' -') != -1:
-            text=text[:text.rfind(' -')]
-
-        return unidecode(text.replace(':', '').strip().lower())
+    if not text:
+        return None
+    
+    text = re.sub(r'[\(\[].*?[\)\]]', '', text)
+    
+    for sep in (' -', ':', ' ou '):
+        if sep in text:
+            text = text[:text.find(sep)]
+            
+    text = unidecode(text.strip().lower())
+    return re.sub(r'[^\w\s]', '', text).strip()
 
 def clean_price(element_or_text):
     if not element_or_text:
@@ -34,7 +47,7 @@ def clean_price(element_or_text):
     
     text = element_or_text if isinstance(element_or_text, str) else element_or_text.text
     
-    clean = text.replace("€", "").replace(",", ".").strip()
+    clean = text.replace("€", "").replace("\xa0", "").replace(" ", "").replace(",", ".").strip()
     try:
         return float(clean)
     except ValueError:

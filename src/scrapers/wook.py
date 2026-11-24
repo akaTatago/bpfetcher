@@ -1,5 +1,5 @@
+import json
 import urllib.parse
-import re
 from .base_scraper import BaseScraper
 from src.utils.scraping_helper import get_soup, clean_text, clean_price, normalize_isbn
 
@@ -11,42 +11,38 @@ class WookScraper(BaseScraper):
         if "https://" in isbn:
             url = isbn
         else:
-            isbn=normalize_isbn(isbn)
-            url = f"{self.base_url}/pesquisa?keyword={isbn}++"
+            isbn = normalize_isbn(isbn)
+            url = f"{self.base_url}/pesquisa?keyword={isbn}"
 
         soup, final_url = get_soup(url)
-        if not soup or not soup.find("div", class_="right d-flex flex-column"):
+        if not soup or not soup.find("script", type="application/ld+json"):
             return None
 
-        info = soup.find("div", class_="right d-flex flex-column")
-        price_tag = info.find("span", class_="price text-black text-align-right")
-        price = clean_price(price_tag)
-
-        pages = 0
-        info_table = soup.find("table")
-        if info_table:
-            page_row = info_table.find("td", string=re.compile("Páginas"))
-            if page_row:
-                value_cell = page_row.find_next_sibling("td")
-                if value_cell:
-                    try:
-                        pages = int(clean_text(value_cell))
-                    except:
-                        pass
+        data = json.loads(soup.find("script", type="application/ld+json").string)
+        
+        authors_data = data.get("author", {})
+        if isinstance(authors_data, list):
+            author_found = " e ".join([a.get("name", "") for a in authors_data])
+        elif isinstance(authors_data, dict):
+            author_found = authors_data.get("name", "")
+        else:
+            author_found = str(authors_data)
+            
+        right_flex = soup.find("div", class_="right d-flex flex-column")
         
         return {
             "store": self.store_name,
-            "title_found": clean_text(info.find("span", class_="title")),
-            "author_found": clean_text(info.find("span", class_="authors").find("a")),
-            "price": price,
-            "pages": pages,
+            "title_found": data.get("name", ""),
+            "author_found": author_found.replace(" e ", " and "),
+            "price": data.get("offers", {}).get("price", 0.0),
+            "pages": data.get("numberOfPages", 0),
             "on_sale": bool(soup.find("s", class_="text-red text-align-right")),
-            "status": "Available" if price > 0 else "Unavailable",
+            "status": "Available" if right_flex and right_flex.find("span", class_="price text-black text-align-right") else "Unavailable",
             "link": final_url
         }
     
     def search_by_text(self, title, author):
-        query = urllib.parse.quote(title.lower().replace(' ', '+'))
+        query = urllib.parse.quote(f"{title} {author}".lower())
         url = f"{self.base_url}/pesquisa?keyword={query}"
         soup, response_link = get_soup(url)
         if not soup: return []
