@@ -6,25 +6,17 @@ from src.utils.scraping_helper import get_soup, normalize
 
 
 class BaseScraper(ABC):
-    """Common flow for every store.
-
-    A store only describes WHERE things are (URLs and HTML selectors) by implementing
-    the hooks below. The search flow itself lives here, once:
-
-        search_by_text -> _text_queries -> _fetch(_search_url) -> _find_cards
-                       -> _parse_card -> _validate_match
-
-    Public API (what main.py calls):
-        search_by_text(title, author) -> list[BookOffer]
-        scrape_by_isbn(isbn)          -> BookOffer | None
-    """
 
     requires_browser = False   # True for scrapers that drive a real browser (not thread-safe)
     MAX_UNMATCHES = 10         # stop reading a results page after this many non-matching cards
 
+    MAX_FAILURES_IN_A_ROW = 3      # blocked/unreachable this many books in a row -> store is disabled
+
     def __init__(self, store_name, base_url):
         self.store_name = store_name
         self.base_url = base_url
+        self.interactive = True    # may ask the user for help (CAPTCHA, network change)
+        self.failures_in_a_row = 0
 
 
     @abstractmethod
@@ -48,7 +40,8 @@ class BaseScraper(ABC):
         """Build a BookOffer from one result card, or None if it is incomplete."""
 
     def _text_queries(self, title, author):
-        return [f"{title} {author}".lower()]
+        raw = f"{title} {author}".lower()
+        return list(dict.fromkeys([raw, *self.normalized_queries(title, author)]))
 
     def _is_product_page(self, soup):
         return False
@@ -70,7 +63,9 @@ class BaseScraper(ABC):
 
             if self._is_product_page(soup):
                 offer = self._parse_product_page(soup, url)
-                return [offer] if offer else []
+                if offer:
+                    return [offer]
+                continue
 
             cards = self._find_cards(soup)
             if cards:
@@ -141,3 +136,15 @@ class BaseScraper(ABC):
                 return True
 
         return False
+
+    # ----------------------------------------------------------------- health
+
+    @property
+    def disabled(self):
+        return self.failures_in_a_row >= self.MAX_FAILURES_IN_A_ROW
+
+    def record_failure(self):
+        self.failures_in_a_row += 1
+
+    def record_success(self):
+        self.failures_in_a_row = 0

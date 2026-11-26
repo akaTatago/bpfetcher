@@ -14,7 +14,7 @@ def load_books(file_path, mode='isbn'):
         books_list = []
         
         if mode == 'isbn':
-            isbn_col = next((col for col in df.columns if 'isbn13' in col.lower()), None)
+            isbn_col = next((col for col in df.columns if 'isbn13' in col.lower() or col.lower() == 'isbn'), None)
             
             if not isbn_col:
                 print(f"Error: No column with 'ISBN' found in {file_path}")
@@ -67,3 +67,33 @@ def _read_csv_any_encoding(file_path):
         except UnicodeDecodeError:
             continue
     raise ValueError(f"Could not decode {file_path} with any known encoding.")
+
+def _clean_isbn(value):
+    if not isinstance(value, str):
+        return ''
+    return value.replace('=', '').replace('"', '').replace('-', '').strip()
+
+
+def _first_text(book, names):
+    for key, value in book.items():
+        if key.lower() in names and isinstance(value, str) and value.strip():
+            return value.strip()
+    return ''
+
+
+def book_isbn(book):
+    for key, value in book.items():
+        name = key.lower()
+        if name in ('identifier', 'isbn') or 'isbn13' in name:
+            isbn = _clean_isbn(value)
+            if isbn:
+                return isbn
+    return ''
+
+
+def book_title(book):
+    return _first_text(book, ('title', 'titulo'))
+
+
+def book_author(book):
+    return _first_text(book, ('author', 'autor'))

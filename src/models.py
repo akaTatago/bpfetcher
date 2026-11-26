@@ -9,6 +9,9 @@ class Status(str, Enum):
     AVAILABLE = "Available"
     UNAVAILABLE = "Unavailable"
     NOT_FOUND = "Not found"
+    BLOCKED = "Blocked"      # the store refused us (403, 429, CAPTCHA...)
+    ERROR = "Error"          # the store failed or could not be read
+    SKIPPED = "Skipped"      # store disabled after repeated failures
 
     @classmethod
     def from_bool(cls, available):
@@ -43,6 +46,10 @@ class BookOffer:
             pages=parse_int(data.get("numberOfPages")),
             link=link,
         )
+
+    @classmethod
+    def missing(cls, store, status=Status.NOT_FOUND):
+        return cls(store=store, status=status)
 
     #csv columns in output order
     def to_row(self):

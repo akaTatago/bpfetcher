@@ -4,6 +4,7 @@ import re
 import threading
 import time
 from urllib.parse import urlparse
+from src.errors import BlockedError, NetworkError
 
 from bs4 import BeautifulSoup
 from curl_cffi import requests
@@ -11,6 +12,8 @@ from unidecode import unidecode
 
 AUTHOR_SEPARATOR = " e "
 MIN_DELAY, MAX_DELAY = 2, 4
+MAX_RETRIES = 2               # extra attempts after the first one
+BACKOFF_SECONDS = 2           # base of the exponential wait between retries
 
 _last_request = {}
 _throttle_lock = threading.Lock()
@@ -27,24 +30,51 @@ def _throttle(url):
         time.sleep(start - now)
 
 
+def _backoff(attempt, retry_after=None):
+    delay = BACKOFF_SECONDS * 2 ** (attempt - 1) + random.uniform(0, 1)
+    if retry_after and str(retry_after).isdigit():
+        delay = max(delay, min(int(retry_after), 30))
+    time.sleep(delay)
+
+
 def get_soup(url, cookies=None, headers=None):
-    try:
-        _throttle(url)
-        response = requests.get(
-            url,
-            impersonate="chrome",
-            cookies=cookies,
-            headers=headers,
-            timeout=15
-        )
-        if response.status_code >= 400:
-            if response.status_code != 404:
-                print(f"HTTP {response.status_code} ({url})")
+    error = None
+    retry_after = None
+
+    for attempt in range(MAX_RETRIES + 1):
+        if attempt:
+            _backoff(attempt, retry_after)
+            retry_after = None
+
+        try:
+            _throttle(url)
+            response = requests.get(
+                url,
+                impersonate="chrome",
+                cookies=cookies,
+                headers=headers,
+                timeout=15
+            )
+        except Exception as e:
+            error = NetworkError(f"{type(e).__name__} on {url}")
+            continue
+
+        status = response.status_code
+        if status < 400:
+            return BeautifulSoup(response.text, "lxml"), response.url
+        if status in (404, 410):
             return None, None
-        return BeautifulSoup(response.text, "lxml"), response.url
-    except Exception as e:
-        print(f"Connection error ({url}): {e}")
-        return None, None
+        if status in (401, 403):
+            raise BlockedError(f"HTTP {status} on {url}")
+        if status == 429:
+            error = BlockedError(f"HTTP 429 (too many requests) on {url}")
+            retry_after = response.headers.get("Retry-After")
+        elif status >= 500:
+            error = NetworkError(f"HTTP {status} on {url}")
+        else:
+            raise NetworkError(f"HTTP {status} on {url}")
+
+    raise error
 
 def clean_text(element):
     if element:

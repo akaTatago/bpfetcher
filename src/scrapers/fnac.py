@@ -10,7 +10,9 @@ from src.utils.scraping_helper import (
     clean_text, clean_price, normalize_isbn,
     is_available, join_authors, parse_jsonld_product, parse_offer, parse_int
 )
+from src.errors import BlockedError, NetworkError, ScraperError
 
+RESTRICTED_TEXTS = ("O acesso está temporariamente restrito", "Access is temporarily restricted")
 
 class FnacScraper(BaseScraper):
     requires_browser = True
@@ -64,25 +66,52 @@ class FnacScraper(BaseScraper):
 
             html = self.page.content()
 
-            if "O acesso está temporariamente restrito" in html or "Access is temporarily restricted" in html:
-                print("\n[Fnac] Blocked by DataDome (IP temporarily restricted).")
-                print("[Fnac] Please switch network/IP (e.g., router restart or hotspot) and press ENTER to retry...")
-                input()
-                self.page.reload(wait_until="domcontentloaded", timeout=30000)
-                time.sleep(2)
-                html = self.page.content()
+            if self._is_restricted(html):
+                html = self._wait_for_unblock()
 
             if "captcha-delivery.com" in html:
-                print("\n[Fnac] CAPTCHA detected! Please solve it in the browser window...")
-                self.page.wait_for_selector("article.Article-itemGroup, .f-productHeader, header", timeout=120000)
-                time.sleep(2)
-                html = self.page.content()
+                html = self._wait_for_captcha()
 
             return BeautifulSoup(html, "lxml"), self.page.url
 
+        except ScraperError:
+            raise
         except Exception as e:
-            print(f"[Fnac] Navigation error ({url}): {e}")
-            return None, None
+            raise NetworkError(f"Fnac navigation error on {url}: {e}") from e
+
+    @staticmethod
+    def _is_restricted(html):
+        return any(text in html for text in RESTRICTED_TEXTS)
+
+    def _wait_for_unblock(self):
+        if not self.interactive:
+            raise BlockedError("Fnac: IP temporarily restricted (DataDome)")
+
+        print("\n[Fnac] Blocked by DataDome (IP temporarily restricted).")
+        print("[Fnac] Please switch network/IP (e.g., router restart or hotspot) and press ENTER to retry...")
+        try:
+            input()
+        except EOFError:
+            raise BlockedError("Fnac: IP temporarily restricted (no terminal to ask the user)")
+
+        self.page.reload(wait_until="domcontentloaded", timeout=30000)
+        time.sleep(2)
+        html = self.page.content()
+        if self._is_restricted(html):
+            raise BlockedError("Fnac: still restricted after retrying")
+        return html
+
+    def _wait_for_captcha(self):
+        if not self.interactive:
+            raise BlockedError("Fnac: CAPTCHA (run without --no-interactive to solve it)")
+
+        print("\n[Fnac] CAPTCHA detected! Please solve it in the browser window...")
+        try:
+            self.page.wait_for_selector("article.Article-itemGroup, .f-productHeader, header", timeout=120000)
+        except Exception:
+            raise BlockedError("Fnac: CAPTCHA not solved in time")
+        time.sleep(2)
+        return self.page.content()
 
     def _is_marketplace(self, url):
         return bool(url and re.search(r"/mp\d+", url))
