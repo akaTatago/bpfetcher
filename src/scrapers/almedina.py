@@ -2,25 +2,20 @@ import urllib.parse
 from .base_scraper import BaseScraper
 from src.models import BookOffer, Status
 from src.utils.scraping_helper import (
-    get_soup, clean_text, clean_price, normalize_isbn, has_text,
+    clean_text, clean_price, normalize_isbn, has_text,
     parse_jsonld_product, parse_int
 )
+
 
 class AlmedinaScraper(BaseScraper):
     def __init__(self):
         super().__init__("Almedina", "https://www.almedina.net")
 
     def scrape_by_isbn(self, isbn):
-        if "https://" in isbn:
-            url = isbn
-        else:
-            isbn = normalize_isbn(isbn)
-            url = f"{self.base_url}/catalogsearch/result/?q={isbn}"
+        # Almedina redirects an ISBN search straight to the product page
+        return self.scrape_product_page(f"{self.base_url}/catalogsearch/result/?q={normalize_isbn(isbn)}")
 
-        soup, response_link = get_soup(url)
-        if not soup:
-            return None
-
+    def _parse_product_page(self, soup, url):
         data = parse_jsonld_product(soup)
         if not data:
             return None
@@ -29,7 +24,7 @@ class AlmedinaScraper(BaseScraper):
         price_area = prod.find("div", class_="price-box") if prod else None
         availability_tag = prod.find("div", class_="availability") if prod else None
 
-        offer = BookOffer.from_jsonld(self.store_name, data, response_link)
+        offer = BookOffer.from_jsonld(self.store_name, data, url)
         offer.on_sale = bool(price_area and price_area.find("span", class_="special-price"))
         offer.status = Status.from_bool(not has_text(availability_tag, "Indisponível"))
 
@@ -41,58 +36,38 @@ class AlmedinaScraper(BaseScraper):
                     break
 
         return offer
-    
-    def search_by_text(self, title, author):
-        query = urllib.parse.quote(f"{title} {author}".lower())
-        url = f"{self.base_url}/catalogsearch/result/?q={query}"
-        soup, response_url = get_soup(url)
 
-        if not soup: return []
+    def _search_url(self, query):
+        return f"{self.base_url}/catalogsearch/result/?q={urllib.parse.quote(query)}"
 
-        results = []
-        unmatches = 0
-        products = soup.find_all("li", class_="product-item")
+    def _find_cards(self, soup):
+        return soup.find_all("li", class_="product-item")
 
-        if not soup.find("div", class_="sidebar"):
-            match = self.scrape_by_isbn(response_url)
-            if match:
-                results.append(match)
-            return results
+    def _is_product_page(self, soup):
+        # Results pages have a filter sidebar; product pages do not (even though
+        # they also contain "product-item" cards for related books).
+        return not soup.find("div", class_="sidebar")
 
-        for prod in products:
-            if unmatches >= 10:
-                break
+    def _parse_card(self, card):
+        info = card.find("div", class_="product-item-details")
+        if not info:
+            return None
 
-            info = prod.find("div", class_="product-item-details")
-            if not info:
-                unmatches += 1
-                continue
+        title_tag = info.find("strong", class_="product-item-name")
+        author_tag = info.find("div", class_="product-author-name")
+        link_tag = info.find("a", href=True)
 
-            title_tag = info.find("strong", class_="product-item-name")
-            author_tag = info.find("div", class_="product-author-name")
-            link_tag = info.find("a", href=True)
+        if not title_tag or not author_tag or not link_tag:
+            return None
 
-            if not title_tag or not author_tag or not link_tag:
-                unmatches += 1
-                continue
+        price_area = card.find("div", class_="price-box")
 
-            f_title = clean_text(title_tag)
-            f_author = clean_text(author_tag)
-
-            if self._validate_match(title, author, f_title, f_author):
-                price_area = prod.find("div", class_="price-box")
-
-                results.append(BookOffer(
-                    store=self.store_name,
-                    title_found=f_title,
-                    author_found=f_author,
-                    price=clean_price(price_area.find("span", class_="price")) if price_area else None,
-                    on_sale=bool(price_area and price_area.find("span", class_="old-price")),
-                    status=Status.from_bool(not has_text(info.find("p", class_="availability"), "Indisponível")),
-                    link=self.absolute_url(link_tag["href"])
-                ))
-            else:
-                unmatches += 1
-
-    
-        return results
+        return BookOffer(
+            store=self.store_name,
+            title_found=clean_text(title_tag),
+            author_found=clean_text(author_tag),
+            price=clean_price(price_area.find("span", class_="price")) if price_area else None,
+            on_sale=bool(price_area and price_area.find("span", class_="old-price")),
+            status=Status.from_bool(not has_text(info.find("p", class_="availability"), "Indisponível")),
+            link=self.absolute_url(link_tag["href"])
+        )

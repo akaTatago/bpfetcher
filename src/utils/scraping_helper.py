@@ -132,6 +132,12 @@ def parse_authors(author_data):
     )
 
 
+AVAILABLE_SCHEMA_VALUES = {"InStock", "LimitedAvailability", "OnlineOnly"}
+
+
+def is_available(availability_url):
+    return (availability_url or "").rsplit("/", 1)[-1] in AVAILABLE_SCHEMA_VALUES
+
 def parse_offer(data):
     offers = data.get("offers", {})
     if isinstance(offers, list):

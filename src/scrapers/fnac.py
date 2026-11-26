@@ -7,12 +7,14 @@ from patchright.sync_api import sync_playwright
 from .base_scraper import BaseScraper
 from src.models import BookOffer, Status
 from src.utils.scraping_helper import (
-    clean_text, clean_price, normalize_isbn, normalize,
-    join_authors, parse_jsonld_product, parse_offer, parse_int
+    clean_text, clean_price, normalize_isbn,
+    is_available, join_authors, parse_jsonld_product, parse_offer, parse_int
 )
 
 
 class FnacScraper(BaseScraper):
+    requires_browser = True
+
     def __init__(self):
         super().__init__("Fnac", "https://www.fnac.pt")
         self.playwright = None
@@ -54,7 +56,7 @@ class FnacScraper(BaseScraper):
 
         self.page.route("**/*", _block_heavy_assets)
 
-    def _get_fnac_soup(self, url):
+    def _fetch(self, url):
         try:
             time.sleep(1.5)
             self.page.goto(url, wait_until="domcontentloaded", timeout=30000)
@@ -85,37 +87,39 @@ class FnacScraper(BaseScraper):
     def _is_marketplace(self, url):
         return bool(url and re.search(r"/mp\d+", url))
 
-    def scrape_by_isbn(self, isbn):
-        isbn = normalize_isbn(isbn)
-        url = f"{self.base_url}/SearchResult/ResultList.aspx?Search={isbn}&sft=1&sa=0"
+    def _search_url(self, query):
+        return f"{self.base_url}/SearchResult/ResultList.aspx?Search={urllib.parse.quote(query)}&sft=1&sa=0"
 
-        soup, response_url = self._get_fnac_soup(url)
+    def scrape_by_isbn(self, isbn):
+        soup, final_url = self._fetch(self._search_url(normalize_isbn(isbn)))
         if not soup:
             return None
 
+        # The search may land directly on the product page...
+        offer = self._parse_product_page(soup, final_url)
+        if offer:
+            return offer
+
+        # ...otherwise follow the first result
+        card = soup.find("article", class_="Article-itemGroup")
+        title_link = card.find("a", class_="Article-title") if card else None
+        if not title_link or not title_link.get("href"):
+            return None
+
+        soup, final_url = self._fetch(self.absolute_url(title_link["href"]))
+        if not soup or self._is_marketplace(final_url):
+            return None
+        return self._parse_product_page(soup, final_url)
+
+    def _parse_product_page(self, soup, url):
         data = parse_jsonld_product(soup)
-        final_url = response_url
-
-        if not data:
-            prod = soup.find("article", class_="Article-itemGroup")
-            if not prod:
-                return None
-            title_link = prod.find("a", class_="Article-title")
-            if not title_link or not title_link.get("href"):
-                return None
-
-            soup, final_url = self._get_fnac_soup(self.absolute_url(title_link["href"]))
-            if not soup or self._is_marketplace(final_url):
-                return None
-            data = parse_jsonld_product(soup)
-
         if not data:
             return None
 
-        offer = BookOffer.from_jsonld(self.store_name, data, final_url)
+        offer = BookOffer.from_jsonld(self.store_name, data, url)
 
         _, availability_url = parse_offer(data)
-        offer.status = Status.from_bool("InStock" in availability_url and bool(offer.price))
+        offer.status = Status.from_bool(is_available(availability_url) and bool(offer.price))
 
         active_offer = None
         for wrapper in soup.find_all("div", class_="f-faPriceBox__radioWrapper"):
@@ -142,65 +146,54 @@ class FnacScraper(BaseScraper):
 
         return offer
 
-    def search_by_text(self, title, author):
-        safe_title = normalize(title) or title
-        safe_author = normalize(author) or author
-        query = urllib.parse.quote(f"{safe_title} {safe_author}".lower())
-        url = f"{self.base_url}/SearchResult/ResultList.aspx?Search={query}&sft=1&sa=0"
+    def _text_queries(self, title, author):
+        return self.normalized_queries(title, author)
 
-        soup, _ = self._get_fnac_soup(url)
-        products = soup.find_all("article", class_="Article-itemGroup") if soup else []
+    @staticmethod
+    def _card_link(card):
+        title_tag = card.find("a", class_="Article-title")
+        return title_tag.get("href", "") if title_tag else ""
 
-        if not products:
-            query = urllib.parse.quote(safe_title.lower())
-            url = f"{self.base_url}/SearchResult/ResultList.aspx?Search={query}&sft=1&sa=0"
-            soup, _ = self._get_fnac_soup(url)
-            products = soup.find_all("article", class_="Article-itemGroup") if soup else []
+    def _find_cards(self, soup):
+        cards = soup.find_all("article", class_="Article-itemGroup")
+        # Skip ebook sub-cards ("Versão ebook em ...") and marketplace (third-party seller) listings
+        return [
+            c for c in cards
+            if "Article-itemGroup--subPE" not in c.get("class", [])
+            and not self._is_marketplace(self._card_link(c))
+        ]
 
-        if not products:
-            return []
+    @staticmethod
+    def _card_price(card):
+        for block in card.find_all("div", class_="blocPriceBorder"):
+            if "base" in block.get_text().lower():
+                return clean_price(block.find("span", class_="price"))
+        return clean_price(card.find(class_="userPrice"))
 
-        results = []
-        unmatches = 0
+    def _parse_card(self, card):
+        title_tag = card.find("a", class_="Article-title")
+        author_tag = card.find(class_="Article-descSub")
 
-        for prod in products:
-            if unmatches >= 10:
-                break
+        if not title_tag or not author_tag:
+            return None
 
-            title_tag = prod.find("a", class_="Article-title")
-            author_tag = prod.find(class_="Article-descSub")
+        author_links = author_tag.find_all("a")
+        if author_links:
+            author_found = join_authors(a.get_text(strip=True) for a in author_links)
+        else:
+            author_found = clean_text(author_tag)
 
-            if not title_tag or not author_tag:
-                unmatches += 1
-                continue
+        price = self._card_price(card)
 
-            link = title_tag.get("href", "")
-            if self._is_marketplace(link):
-                continue
-
-            f_title = clean_text(title_tag)
-            author_links = author_tag.find_all("a")
-            if author_links:
-                f_author = join_authors(a.get_text(strip=True) for a in author_links)
-            else:
-                f_author = clean_text(author_tag)
-
-            if self._validate_match(title, author, f_title, f_author):
-                price = clean_price(prod.find(class_="userPrice"))
-
-                results.append(BookOffer(
-                    store=self.store_name,
-                    title_found=f_title,
-                    author_found=f_author,
-                    price=price,
-                    on_sale=bool(prod.find(class_="oldPrice")),
-                    status=Status.from_bool(price),
-                    link=self.absolute_url(link)
-                ))
-            else:
-                unmatches += 1
-
-        return results
+        return BookOffer(
+            store=self.store_name,
+            title_found=clean_text(title_tag),
+            author_found=author_found,
+            price=price,
+            on_sale=bool(card.find(class_="oldPrice")),
+            status=Status.from_bool(price and card.find("button", class_="js-ProductBuy-add")),
+            link=self.absolute_url(self._card_link(card))
+        )
 
     def close(self):
         if self.context:
