@@ -1,9 +1,12 @@
 venv/
+.venv/
 env/
 __pycache__/
 *.py[cod]
+*.egg-info/
+build/
+dist/
 .env
 data/*.csv
-!data/.gitkeep
 *.log
 .fnac_browser_profile/
