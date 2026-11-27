@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bpfetcher"
+version = "0.1.0"
+description = "CLI tool that compares book prices and availability across Portuguese bookstores"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Tiago" }]
+requires-python = ">=3.10"
+keywords = ["web-scraping", "price-comparison", "books", "cli"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Environment :: Console",
+    "Topic :: Internet :: WWW/HTTP",
+]
+dependencies = [
+    "beautifulsoup4",
+    "lxml",
+    "patchright",
+    "curl-cffi",
+    "pandas",
+    "unidecode",
+    "rich",
+]
+
+[project.scripts]
+bpfetcher = "src.main:main"
+
+[project.urls]
+Repository = "https://github.com/akaTatago/BPFetcher"
+
+[tool.setuptools.packages.find]
+include = ["src*"]
